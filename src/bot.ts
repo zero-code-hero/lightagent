@@ -156,11 +156,8 @@ function handleEvent(
 
     case "message_update": {
       const e = event.assistantMessageEvent;
-      if (e.type === "text_delta") {
+      if (e.type === "text_delta" || e.type === "thinking_delta") {
         streamer.append(e.delta);
-      } else if (e.type === "thinking_delta") {
-        streamer.appendThinking(e.delta);
-        log.debug("thinking_delta", e.delta.slice(0, 50), "... for chat", cs.chatId);
       }
       break;
     }
