@@ -12,6 +12,7 @@ export class TelegramStreamer {
   private lastEditAt = 0;
   private startTime = 0;
   private inTool = false;
+  private thinkingSnippet = "";
 
   constructor(ctx: Context, context: SessionContext) {
     this.ctx = ctx;
@@ -34,6 +35,16 @@ export class TelegramStreamer {
   append(text: string): void {
     if (this.inTool) return;
     this.buffer += text;
+  }
+
+  /** Accumulate thinking — shown in transient status, NOT final output */
+  thinking(text: string): void {
+    // don't let the snippet grow unbounded
+    this.thinkingSnippet += text;
+    if (this.thinkingSnippet.length > 200) {
+      this.thinkingSnippet = "..." + this.thinkingSnippet.slice(-180);
+    }
+    this.scheduleEdit();
   }
 
   /** Show tool status */
@@ -161,20 +172,40 @@ export class TelegramStreamer {
 
   private async doEdit(): Promise<void> {
     if (!this.context.lastMessageId) return;
-    const text = `🤔 Thinking... ${this.elapsed()}`;
+
+    let content: string;
+    const elapsed = this.elapsed();
+
+    if (this.context.currentTool) {
+      content = `🔧 ${this.context.currentTool}... ${elapsed}`;
+    } else if (this.buffer.trim()) {
+      // We have actual text — show the latest chunk as a live preview
+      // Take last ~500 chars so the message doesn't balloon
+      const preview = this.buffer.trimEnd().slice(-500);
+      content = preview;
+    } else {
+      const prefix = `🤔 Thinking... ${elapsed}`;
+      if (this.thinkingSnippet.trim()) {
+        const snippet = this.thinkingSnippet.trim().slice(-150);
+        content = `${prefix}\n\n${snippet}`;
+      } else {
+        content = prefix;
+      }
+    }
+
     try {
       await this.ctx.telegram.editMessageText(
         this.ctx.chat!.id,
         this.context.lastMessageId,
         undefined,
-        text,
+        content,
         { parse_mode: undefined }
       );
       this.lastEditAt = Date.now();
     } catch (err: any) {
       log.debug("edit failed:", err.message ?? String(err));
       try {
-        const msg = await this.ctx.reply(text, { parse_mode: undefined });
+        const msg = await this.ctx.reply(content, { parse_mode: undefined });
         this.context.lastMessageId = msg.message_id;
         this.lastEditAt = Date.now();
       } catch {

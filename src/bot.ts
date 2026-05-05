@@ -156,8 +156,10 @@ function handleEvent(
 
     case "message_update": {
       const e = event.assistantMessageEvent;
-      if (e.type === "text_delta" || e.type === "thinking_delta") {
+      if (e.type === "text_delta") {
         streamer.append(e.delta);
+      } else if (e.type === "thinking_delta") {
+        streamer.thinking(e.delta);
       }
       break;
     }
