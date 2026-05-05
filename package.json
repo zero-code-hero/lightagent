@@ -1,0 +1,57 @@
+{
+  "name": "lightagent",
+  "version": "1.0.0",
+  "description": "Telegram bot wrapping the pi coding agent loop. Ollama by default. Remotely accessible.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zero-code-hero/lightagent.git"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "coding-agent",
+    "pi",
+    "ollama",
+    "ai",
+    "agent"
+  ],
+  "author": "zero-code-hero",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/zero-code-hero/lightagent/issues"
+  },
+  "homepage": "https://github.com/zero-code-hero/lightagent#readme",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "lightagent": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    ".env.example",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "telegraf": "^4.16.3"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.72.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

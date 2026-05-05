@@ -1,0 +1,29 @@
+[Unit]
+Description=lightagent - Telegram bot wrapping pi coding agent
+After=network.target
+
+[Service]
+Type=simple
+# change this to your actual user
+User=%I
+Group=%I
+
+# working directory — env file lives here
+WorkingDirectory=/home/%I/.lightagent
+
+# path to node binary and the lightagent CLI
+ExecStart=/usr/bin/npx lightagent
+
+# restart on failure
+Restart=on-failure
+RestartSec=5
+
+# environment — or use EnvironmentFile below
+Environment="NODE_ENV=production"
+# Environment="LIGHTAGENT_DEBUG=1"
+
+# optional: load env from file instead
+# EnvironmentFile=/home/%I/.lightagent/.env
+
+[Install]
+WantedBy=multi-user.target
