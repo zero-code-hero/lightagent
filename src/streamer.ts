@@ -10,6 +10,7 @@ export class TelegramStreamer {
   private editTimer?: NodeJS.Timeout;
   private typingTimer?: NodeJS.Timeout;
   private lastEditAt = 0;
+  private startTime = 0;
   private inTool = false;
 
   constructor(ctx: Context, context: SessionContext) {
@@ -17,8 +18,9 @@ export class TelegramStreamer {
     this.context = context;
   }
 
-  /** Start a new run — send initial placeholder */
+  /** Start a new run */
   async startThinking(): Promise<void> {
+    this.startTime = Date.now();
     try {
       const msg = await this.ctx.reply("🤔 Thinking...");
       this.context.lastMessageId = msg.message_id;
@@ -28,29 +30,29 @@ export class TelegramStreamer {
     }
   }
 
-  /** Append text delta — stream live */
+  /** Accumulate text */
   append(text: string): void {
-    if (this.inTool) return; // don't add text while tool status is showing
+    if (this.inTool) return;
     this.buffer += text;
-    this.scheduleEdit();
   }
 
-  /** Show tool is running — immediate, pauses text */
+  /** Show tool status */
   async setTool(name: string): Promise<void> {
     this.cancelEdit();
     this.inTool = true;
     this.context.currentTool = name;
     try {
+      const text = `🔧 ${name}... ${this.elapsed()}`;
       if (this.context.lastMessageId) {
         await this.ctx.telegram.editMessageText(
           this.ctx.chat!.id,
           this.context.lastMessageId,
           undefined,
-          `🔧 ${name}...`,
+          text,
           { parse_mode: undefined }
         );
       } else {
-        const msg = await this.ctx.reply(`🔧 ${name}...`);
+        const msg = await this.ctx.reply(text, { parse_mode: undefined });
         this.context.lastMessageId = msg.message_id;
       }
     } catch (err: any) {
@@ -58,28 +60,28 @@ export class TelegramStreamer {
     }
   }
 
-  /** Tool done — flash status, resume text */
+  /** Tool done — flash, resume */
   async endTool(success: boolean): Promise<void> {
     this.context.currentTool = undefined;
     try {
       if (this.context.lastMessageId) {
+        const text = success ? `✅ Done ${this.elapsed()}` : `❌ Error ${this.elapsed()}`;
         await this.ctx.telegram.editMessageText(
           this.ctx.chat!.id,
           this.context.lastMessageId,
           undefined,
-          success ? "✅ Done" : "❌ Error",
+          text,
           { parse_mode: undefined }
         );
       }
     } catch {
       // ignore
     }
-    // Back to text
     this.inTool = false;
     this.scheduleEdit();
   }
 
-  /** Force final flush — strip prefix, deliver complete text */
+  /** Force final flush */
   async flushNow(): Promise<void> {
     this.cancelEdit();
 
@@ -91,7 +93,7 @@ export class TelegramStreamer {
             this.ctx.chat!.id,
             this.context.lastMessageId,
             undefined,
-            "✅ Done",
+            `✅ Done ${this.elapsed()}`,
             { parse_mode: undefined }
           );
         } catch {
@@ -138,7 +140,6 @@ export class TelegramStreamer {
     }
   }
 
-  /** Live edit with "Thinking... (snippit)" prefix during generation */
   private scheduleEdit(): void {
     if (this.editTimer) return;
     const delay = Math.max(
@@ -160,42 +161,32 @@ export class TelegramStreamer {
 
   private async doEdit(): Promise<void> {
     if (!this.context.lastMessageId) return;
-
-    const text = this.buffer.trim();
-    let content: string;
-
-    if (!text) {
-      content = "🤔 Thinking...";
-    } else {
-      // Build a "Thinking... (snippet)" preview of current output
-      const snippet = text.slice(-300); // last ~300 chars
-      content = `🤔 Thinking...\n\n${snippet}`;
-    }
-
-    // Respect Telegram edit size limit
-    if (content.length > config.telegramMaxMessageLength) {
-      content = content.slice(0, config.telegramMaxMessageLength);
-    }
-
+    const text = `🤔 Thinking... ${this.elapsed()}`;
     try {
       await this.ctx.telegram.editMessageText(
         this.ctx.chat!.id,
         this.context.lastMessageId,
         undefined,
-        content,
+        text,
         { parse_mode: undefined }
       );
       this.lastEditAt = Date.now();
     } catch (err: any) {
       log.debug("edit failed:", err.message ?? String(err));
       try {
-        const msg = await this.ctx.reply(content, { parse_mode: undefined });
+        const msg = await this.ctx.reply(text, { parse_mode: undefined });
         this.context.lastMessageId = msg.message_id;
         this.lastEditAt = Date.now();
       } catch {
         // ignore
       }
     }
+  }
+
+  private elapsed(): string {
+    const s = Math.floor((Date.now() - this.startTime) / 1000);
+    if (s < 1) return "";
+    return `(${s}s)`;
   }
 
   private keepTyping(): void {
