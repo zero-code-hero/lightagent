@@ -8,6 +8,14 @@ import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
 export function createBot(sessionManager: PiSessionManager): Telegraf<Context> {
   const bot = new Telegraf(config.telegramBotToken);
 
+  // Catch unhandled errors (timeouts, etc) so the bot doesn't crash
+  bot.catch((err: any, ctx) => {
+    log.error("unhandled telegraf error:", err.message ?? String(err));
+    if (ctx?.chat?.id) {
+      void ctx.reply("💥 Something went wrong. Try /abort and send your message again.");
+    }
+  });
+
   // Auth middleware
   bot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
@@ -112,9 +120,13 @@ export function createBot(sessionManager: PiSessionManager): Telegraf<Context> {
       log.info("prompt completed for chat", chatId, "in", elapsed, "ms");
     } catch (err: any) {
       log.error("prompt failed for chat", chatId, err.message ?? String(err));
-      await ctx.reply(`💥 Error: ${err.message ?? String(err)}`);
+      const msg = err.message?.includes("timed out")
+        ? "⏱️ Request timed out. The model took too long to respond. Try again or use a different model."
+        : `💥 Error: ${err.message ?? String(err)}`;
+      await ctx.reply(msg);
     } finally {
       await streamer.flushNow();
+      streamer.dispose();
       unsubscribe();
       cs.context.isProcessing = false;
       cs.lastActivityAt = Date.now();
@@ -147,7 +159,8 @@ function handleEvent(
       if (e.type === "text_delta") {
         streamer.append(e.delta);
       } else if (e.type === "thinking_delta") {
-        log.debug("thinking_delta for chat", cs.chatId);
+        streamer.appendThinking(e.delta);
+        log.debug("thinking_delta", e.delta.slice(0, 50), "... for chat", cs.chatId);
       }
       break;
     }

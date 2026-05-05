@@ -6,18 +6,23 @@ export class TelegramStreamer {
   private ctx: Context;
   private context: SessionContext;
   private textBuffer: string = "";
+  private startTime: number = 0;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private thinkingSnippet: string = "";
 
   constructor(ctx: Context, context: SessionContext) {
     this.ctx = ctx;
     this.context = context;
   }
 
-  /** Start a new run — send the "thinking" placeholder */
+  /** Start a new run */
   async startThinking(): Promise<void> {
+    this.startTime = Date.now();
+    this.thinkingSnippet = "";
     try {
       const msg = await this.ctx.reply("🤔 Thinking...");
       this.context.lastMessageId = msg.message_id;
-      // Send typing action every few seconds while processing
+      this.startHeartbeat();
       this.keepTyping();
     } catch (err: any) {
       log.debug("failed to send thinking message:", err.message ?? String(err));
@@ -29,6 +34,15 @@ export class TelegramStreamer {
     this.textBuffer += text;
   }
 
+  /** Append thinking/reasoning snippet */
+  appendThinking(text: string): void {
+    this.thinkingSnippet += text;
+    // Only keep last ~100 chars so the status doesn't get huge
+    if (this.thinkingSnippet.length > 120) {
+      this.thinkingSnippet = "..." + this.thinkingSnippet.slice(-100);
+    }
+  }
+
   /** Mark that a tool is running */
   async setTool(name: string): Promise<void> {
     try {
@@ -38,11 +52,11 @@ export class TelegramStreamer {
           this.ctx.chat!.id,
           this.context.lastMessageId,
           undefined,
-          `🔧 ${name}...`,
+          `🔧 ${name}...${this.elapsedSuffix()}`,
           { parse_mode: undefined }
         );
       } else {
-        const msg = await this.ctx.reply(`🔧 ${name}...`);
+        const msg = await this.ctx.reply(`🔧 ${name}...${this.elapsedSuffix()}`);
         this.context.lastMessageId = msg.message_id;
       }
     } catch (err: any) {
@@ -59,36 +73,59 @@ export class TelegramStreamer {
           this.ctx.chat!.id,
           this.context.lastMessageId,
           undefined,
-          success ? "✅ Done" : "❌ Error",
+          success ? `✅ Done${this.elapsedSuffix()}` : `❌ Error${this.elapsedSuffix()}`,
           { parse_mode: undefined }
         );
-        // Brief pause so user sees the status, then back to thinking
         await new Promise((r) => setTimeout(r, 400));
-        await this.ctx.telegram.editMessageText(
-          this.ctx.chat!.id,
-          this.context.lastMessageId,
-          undefined,
-          "🤔 Thinking...",
-          { parse_mode: undefined }
-        );
+        await this.statusUpdate();
       }
     } catch (err: any) {
       log.debug("endTool edit failed:", err.message ?? String(err));
     }
   }
 
+  /** Update the thinking message with current status */
+  private async statusUpdate(): Promise<void> {
+    if (!this.context.lastMessageId || !this.context.isProcessing) return;
+
+    const elapsed = this.elapsedSuffix();
+    let status: string;
+
+    if (this.context.currentTool) {
+      status = `🔧 ${this.context.currentTool}...${elapsed}`;
+    } else if (this.thinkingSnippet) {
+      const snippet = this.thinkingSnippet.slice(0, 80);
+      status = `🤔 ${snippet}${this.thinkingSnippet.length > 80 ? "..." : ""}${elapsed}`;
+    } else {
+      status = `🤔 Thinking...${elapsed}`;
+    }
+
+    try {
+      await this.ctx.telegram.editMessageText(
+        this.ctx.chat!.id,
+        this.context.lastMessageId,
+        undefined,
+        status,
+        { parse_mode: undefined }
+      );
+    } catch {
+      // ignore edit failures
+    }
+  }
+
   /** Flush the complete response to Telegram */
   async flushNow(): Promise<void> {
+    this.stopHeartbeat();
+
     const text = this.textBuffer;
     if (!text.trim()) {
-      // No text generated — maybe just tools ran
       if (this.context.lastMessageId) {
         try {
           await this.ctx.telegram.editMessageText(
             this.ctx.chat!.id,
             this.context.lastMessageId,
             undefined,
-            "✅ Done",
+            `✅ Done${this.elapsedSuffix()}`,
             { parse_mode: undefined }
           );
         } catch {
@@ -106,7 +143,6 @@ export class TelegramStreamer {
     }
 
     if (chunks.length === 1 && this.context.lastMessageId) {
-      // Single chunk — edit the placeholder
       try {
         await this.ctx.telegram.editMessageText(
           this.ctx.chat!.id,
@@ -117,11 +153,9 @@ export class TelegramStreamer {
         );
       } catch (err: any) {
         log.debug("final edit failed:", err.message ?? String(err));
-        // Fallback: send as new message
         await this.ctx.reply(chunks[0]!, { parse_mode: undefined });
       }
     } else {
-      // Multiple chunks or no placeholder — send as new messages
       if (this.context.lastMessageId) {
         try {
           await this.ctx.telegram.deleteMessage(this.ctx.chat!.id, this.context.lastMessageId);
@@ -139,17 +173,33 @@ export class TelegramStreamer {
     }
   }
 
-  private keepTyping(): void {
-    const chatId = this.ctx.chat?.id;
-    if (!chatId || !this.context.isProcessing) return;
-    // Send typing action every 4 seconds while running
-    if (this.context.isProcessing) {
-      this.ctx.sendChatAction("typing").catch(() => {});
-      setTimeout(() => this.keepTyping(), 4000);
+  private elapsedSuffix(): string {
+    const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+    if (elapsed < 10) return "";
+    return ` (${elapsed}s)`;
+  }
+
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => {
+      void this.statusUpdate();
+    }, 5000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
     }
   }
 
+  private keepTyping(): void {
+    const chatId = this.ctx.chat?.id;
+    if (!chatId || !this.context.isProcessing) return;
+    this.ctx.sendChatAction("typing").catch(() => {});
+    setTimeout(() => this.keepTyping(), 5000);
+  }
+
   dispose(): void {
-    // nothing to clean up anymore
+    this.stopHeartbeat();
   }
 }
